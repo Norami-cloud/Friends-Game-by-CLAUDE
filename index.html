@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Duelo de Cartas</title>
+<style>
+:root{--felt:#12372a;--felt2:#0b241b;--ivory:#f5efe0;--ink:#1b1b1b;--red:#b8321f;--brass:#c9a227}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;color:var(--ivory);font:16px/1.4 system-ui,sans-serif;background:radial-gradient(ellipse at 50% 30%,var(--felt),var(--felt2))}
+#app{max-width:860px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:14px;min-height:100vh}
+h1{font:700 34px Georgia,serif;margin:8px 0 0}
+button,input{font:inherit;border-radius:8px;border:2px solid var(--brass);padding:10px 14px}
+input{background:var(--felt2);color:var(--ivory);width:100%}
+.btn{background:var(--brass);color:var(--ink);font-weight:700;cursor:pointer}
+.btn.alt{background:transparent;color:var(--ivory)}
+.btn:disabled{opacity:.4;cursor:default}
+button:focus-visible,input:focus-visible{outline:3px solid #fff;outline-offset:2px}
+.row{display:flex;gap:10px;flex-wrap:wrap}.col{display:flex;flex-direction:column;gap:10px}
+.code{font:700 56px Georgia,serif;letter-spacing:.15em;color:var(--brass)}
+.opps{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.opp,.me{border:2px solid #ffffff30;border-radius:12px;padding:10px;background:#0000002e}
+.opp.turn,.me.turn{border-color:var(--brass);box-shadow:0 0 0 3px #c9a22744}
+.opp.dead{opacity:.35}.opp.pick{cursor:pointer;border-color:#fff}
+.bar{height:10px;background:#0006;border-radius:5px;overflow:hidden;margin:6px 0}.bar i{display:block;height:100%;background:var(--brass)}
+.small{font-size:13px;opacity:.85}
+.status{font:italic 20px Georgia,serif;min-height:56px;display:flex;align-items:center}
+.hand{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.card{width:74px;height:108px;background:var(--ivory);color:var(--ink);border:2px solid #0003;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer;padding:4px;transition:transform .12s}
+.card b{font:700 32px Georgia,serif}.card span{font-size:30px}.card i{font-size:11px;font-style:normal;text-align:center}
+.card.red,.card.jk.red{color:var(--red)}.card.jk b{font-size:36px}
+.card.sel{transform:translateY(-14px);border-color:var(--brass);box-shadow:0 6px 0 var(--brass)}
+.card.dim{opacity:.35;cursor:default}
+.log{font-size:14px;opacity:.9;border-top:1px solid #ffffff25;padding-top:8px}
+details{font-size:14px}summary{cursor:pointer}
+#toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--red);padding:10px 16px;border-radius:8px;display:none}
+@media(prefers-reduced-motion:reduce){.card{transition:none}}
+</style></head><body>
+<div id="app"></div><div id="toast" role="alert"></div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const S = io(), app = document.getElementById('app');
+const SYM = { S: '♠', H: '♥', C: '♣', D: '♦' }, rk = v => ({ 1: 'A', 11: 'J', 12: 'Q', 13: 'K' }[v] || v);
+let st = null, sel = null;
+const toast = m => { const t = document.getElementById('toast'); t.textContent = m; t.style.display = 'block'; clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', 3000); };
+const saved = () => JSON.parse(localStorage.getItem('duelo') || 'null');
+
+S.on('connect', () => { const g = saved(); if (g) S.emit('join', g); });
+S.on('joined', g => localStorage.setItem('duelo', JSON.stringify(g)));
+S.on('gone', () => { localStorage.removeItem('duelo'); st = null; home(); });
+S.on('err', toast);
+S.on('state', s => { st = s; if (!s.hand.some(c => c.id === sel)) sel = null; render(); });
+
+function home() {
+  app.innerHTML = `<h1>Duelo de Cartas</h1>
+  <p>Espadas atacan, corazones curan, tréboles esquivan, diamantes defienden.</p>
+  <div class="col"><label>Tu nombre<input id="nm" maxlength="14" value="${localStorage.getItem('nombre') || ''}"></label>
+  <button class="btn" data-a="create">Crear sala</button>
+  <label>O entra con un código<input id="cd" maxlength="4" placeholder="ABCD" style="text-transform:uppercase"></label>
+  <button class="btn alt" data-a="join">Unirme</button></div>${rules()}`;
+}
+const rules = () => `<details><summary>Reglas</summary><p>Vida 25. Tienes 5 cartas. En tu turno juegas una: espada (atacas a alguien), corazón (te curas) o As (tu próxima carta de ese palo vale x2). El atacado puede defenderse con un trébol (esquiva si es mayor que el ataque; si no, no sirve) o un diamante (resta su valor al daño). Joker negro: invierte el sentido. Joker rojo: copia la última carta jugada. Si no puedes o no quieres jugar, descarta una carta y pasa.</p></details>`;
+const cardH = (c, cls = '') => c.s === 'J'
+  ? `<button class="card jk ${c.c === 'red' ? 'red' : ''} ${cls}" data-id="${c.id}"><b>★</b><i>Joker ${c.c === 'red' ? 'rojo' : 'negro'}</i></button>`
+  : `<button class="card ${c.s === 'H' || c.s === 'D' ? 'red' : ''} ${cls}" data-id="${c.id}"><b>${rk(c.v)}</b><span>${SYM[c.s]}</span></button>`;
+
+function render() {
+  if (!st) return home();
+  if (st.phase === 'lobby') {
+    app.innerHTML = `<h1>Sala</h1><div class="code">${st.code}</div><p>Pásales este código a tus amigos (hasta 4 jugadores).</p>
+    <div class="col">${st.players.map(p => `<div class="opp">${p.name}${p.on ? '' : ' (desconectado)'}</div>`).join('')}</div>
+    ${st.host ? `<button class="btn" data-a="start" ${st.players.length < 2 ? 'disabled' : ''}>Empezar partida</button>` : '<p class="small">Esperando a que el anfitrión empiece…</p>'}${rules()}`;
+    return;
+  }
+  const me = st.players[st.me], myturn = st.phase === 'play' && st.turn === st.me, pend = st.pend;
+  const def = st.phase === 'defend' && pend.to === st.me;
+  const c = st.hand.find(x => x.id === sel);
+  const canTarget = myturn && c && (c.s === 'S' || (c.s === 'J' && c.c === 'red'));
+  let msg;
+  if (st.phase === 'over') msg = `Gana ${st.winner}.`;
+  else if (def) msg = `${st.players[pend.from].name} te ataca con ${pend.v}. Elige un trébol o un diamante, o recibe el golpe.`;
+  else if (st.phase === 'defend') msg = `${st.players[pend.to].name} se está defendiendo…`;
+  else if (myturn) msg = c ? (c.s === 'S' ? 'Toca a un rival para atacarlo.' : c.s === 'C' || c.s === 'D' ? 'Esa carta solo sirve para defenderte.' : c.s === 'J' && c.c === 'red' ? 'Copia la última carta. Si es un ataque, toca a un rival; si no, pulsa Jugar.' : 'Pulsa Jugar.') : 'Tu turno: elige una carta.';
+  else msg = `Turno de ${st.players[st.turn].name}.`;
+  const boosts = p => Object.keys(p.boost).filter(k => p.boost[k]).map(k => ` x2${SYM[k]}`).join('');
+  const tile = (p, i, cls) => `<div class="${cls} ${i === st.turn && st.phase !== 'over' ? 'turn' : ''} ${p.hp <= 0 ? 'dead' : ''} ${canTarget && p.hp > 0 ? 'pick' : ''}" data-t="${i}">
+    <b>${p.name}</b>${p.on ? '' : ' (desconectado)'}<div class="bar"><i style="width:${Math.max(0, p.hp) / st.max * 100}%"></i></div>
+    <div class="small">${Math.max(0, p.hp)} de vida · ${p.n} cartas${boosts(p)}</div></div>`;
+  const ok = x => !def || x.s === 'C' || x.s === 'D';
+  app.innerHTML = `<div class="opps">${st.players.map((p, i) => i === st.me ? '' : tile(p, i, 'opp')).join('')}</div>
+  <div class="small">Sentido ${st.dir === 1 ? '↻ horario' : '↺ antihorario'} · Mazo: ${st.deck}</div>
+  <div class="status" aria-live="polite">${msg}</div>
+  ${tile(me, st.me, 'me')}
+  <div class="hand">${st.hand.map(x => cardH(x, (x.id === sel ? 'sel ' : '') + (ok(x) ? '' : 'dim'))).join('')}</div>
+  <div class="row" style="justify-content:center">
+    ${myturn ? `<button class="btn" data-a="play" ${!c || c.s === 'S' || c.s === 'C' || c.s === 'D' ? 'disabled' : ''}>Jugar</button><button class="btn alt" data-a="discard" ${c ? '' : 'disabled'}>Descartar y pasar</button>` : ''}
+    ${def ? `<button class="btn" data-a="defend" ${c && (c.s === 'C' || c.s === 'D') ? '' : 'disabled'}>Defender con la carta</button><button class="btn alt" data-a="take">Recibir golpe</button>` : ''}
+    ${st.phase === 'over' ? '<button class="btn" data-a="exit">Volver al inicio</button>' : ''}</div>
+  <div class="log">${st.log.map(l => `<div>${l}</div>`).join('')}</div>${rules()}`;
+}
+
+app.addEventListener('click', e => {
+  const b = e.target.closest('[data-a]'), cd = e.target.closest('[data-id]'), t = e.target.closest('[data-t]');
+  if (b) {
+    const a = b.dataset.a;
+    if (a === 'create' || a === 'join') {
+      const name = document.getElementById('nm').value.trim() || 'Jugador'; localStorage.setItem('nombre', name);
+      if (a === 'create') S.emit('create', { name }); else S.emit('join', { code: document.getElementById('cd').value.toUpperCase(), name });
+    }
+    if (a === 'start') S.emit('start');
+    if (a === 'play') S.emit('play', { cardId: sel });
+    if (a === 'discard') S.emit('discard', { cardId: sel });
+    if (a === 'defend') S.emit('defend', { cardId: sel });
+    if (a === 'take') S.emit('defend', { cardId: null });
+    if (a === 'exit') { localStorage.removeItem('duelo'); st = null; home(); }
+    return;
+  }
+  if (cd && st) { sel = +cd.dataset.id; render(); return; }
+  if (t && st && st.phase === 'play' && st.turn === st.me && sel != null) S.emit('play', { cardId: sel, target: +t.dataset.t });
+});
+home();
+</script></body></html>
